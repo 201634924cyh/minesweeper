@@ -281,7 +281,7 @@ class Renderer:
         surf.blit(img, img.get_rect(center=inner.center))
 
     # ---------- 笑脸按钮 ----------
-    def face(self, surf, center, state, face_state):
+    def face(self, surf, center, face_state):
         r = FACE_R
         rect = pygame.Rect(center[0] - r - 4, center[1] - r - 4, 2 * r + 8, 2 * r + 8)
         pygame.draw.rect(surf, C_FACE, rect)
@@ -314,7 +314,7 @@ class Renderer:
         return rect
 
     # ---------- 单个格子 ----------
-    def cell(self, surf, rect, cell, board_state, preview=False):
+    def cell(self, surf, rect, cell):
         x, y, w, h = rect
         if not cell.open:
             pygame.draw.rect(surf, C_FACE, rect)
@@ -377,6 +377,8 @@ class Game:
         self.origin = (0, 0)
         self.last_tick = 0
         self.clock = pygame.time.Clock()
+        self._menu_rects = []
+        self._tip_rect = pygame.Rect(0, 0, 0, 0)
         self.set_difficulty(0, start=False)
 
     # ---------- 尺寸 / 难度 ----------
@@ -386,13 +388,24 @@ class Game:
         h = d["rows"] * CELL + PAD * 2 + HUD_H
         return max(360, w), max(320, h)
 
+    def _board_origin(self, sw, sh, d):
+        """棋盘在窗口内居中定位。
+
+        初级棋盘仅 288px 宽，会被 size_for 的 360px 下限撑宽，
+        所以不能直接写 `(PAD, HUD_H + PAD)`——那样左留白 10px、右留白 62px。
+        这里按窗口实际尺寸反算，保证左右、上下留白一致。
+        """
+        ox = max(PAD, (sw - d["cols"] * CELL) // 2)
+        oy = HUD_H + max(PAD, (sh - HUD_H - d["rows"] * CELL) // 2)
+        return ox, oy
+
     def set_difficulty(self, idx, start=True):
         self.diff_index = idx % len(DIFFICULTIES)
         d = DIFFICULTIES[self.diff_index]
         w, h = self.size_for(self.diff_index)
         self.screen = pygame.display.set_mode((w, h))
         self.board = Board(d["cols"], d["rows"], d["mines"])
-        self.origin = (PAD, HUD_H + PAD)
+        self.origin = self._board_origin(w, h, d)
         self.face_state = "smile"
         self.last_tick = pygame.time.get_ticks()
         if start:
@@ -463,14 +476,13 @@ class Game:
                 self.face_state = self._face_for_state()
                 hit = self.pick(ev.pos)
                 if hit and self.board.state == ST_PLAY:
-                    self.board.reveal(*hit)
-                    self.face_state = self._face_for_state()
-                elif self.board.state == ST_PLAY:
-                    # 同时按下左右键 => 和弦
+                    # 左右键同按 = 和弦：右键仍按住时，松开左键不能当成普通翻开。
+                    # （原先无论右键是否按住都直接 reveal，和弦分支永远走不到）
                     if pygame.mouse.get_pressed()[2]:
-                        h2 = self.pick(ev.pos)
-                        if h2:
-                            self.board.chord(*h2)
+                        self.board.chord(*hit)
+                    else:
+                        self.board.reveal(*hit)
+                    self.face_state = self._face_for_state()
             elif ev.button == 3:
                 if pygame.mouse.get_pressed()[0]:
                     h2 = self.pick(ev.pos)
@@ -482,7 +494,7 @@ class Game:
 
     def _menu_event(self, ev):
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
-            for i, rect in enumerate(getattr(self, "_menu_rects", [])):
+            for i, rect in enumerate(self._menu_rects):
                 if rect.collidepoint(ev.pos):
                     self.set_difficulty(i)
                     return
@@ -525,8 +537,7 @@ class Game:
         self.ren.led(self.screen, pygame.Rect(PAD + 4, 13, LED_W, LED_H),
                      self.board.total_mines - self.board.flags)
         # 笑脸
-        self.face_rect = self.ren.face(self.screen, (sw // 2, HUD_H // 2),
-                                       self.board.state, self.face_state)
+        self.face_rect = self.ren.face(self.screen, (sw // 2, HUD_H // 2), self.face_state)
         # 计时
         self.ren.led(self.screen, pygame.Rect(sw - PAD - 4 - LED_W, 13, LED_W, LED_H),
                      self.board.time)
@@ -543,7 +554,7 @@ class Game:
         for r in range(b.rows):
             for c in range(b.cols):
                 rect = pygame.Rect(ox + c * CELL, oy + r * CELL, CELL, CELL)
-                self.ren.cell(self.screen, rect, b.cell(c, r), b.state)
+                self.ren.cell(self.screen, rect, b.cell(c, r))
 
     def draw_overlay(self):
         if self.board.state == ST_PLAY:
@@ -570,31 +581,69 @@ class Game:
         tip = self.ren.f_small.render("F2 / 点笑脸 重新开始，M 返回菜单", True, C_SHADOW)
         self.screen.blit(tip, tip.get_rect(center=(panel.centerx, panel.top + 108)))
 
+    def _menu_geometry(self, sh, n):
+        """菜单纵向布局 → (标题中心 y, 副标题中心 y, 按钮起始 y, 按钮高, 按钮间距, 提示中心 y)。
+
+        空间宽裕时沿用原始间距；窗口装不下时按 间距 → 按钮高度 → 整体上移 的顺序压缩。
+        初级窗口只有 370px 高，硬编码的 y0=160 会让第三个按钮越过底边并与提示文字重叠。
+        """
+        h_title = self.ren.f_title.get_height()
+        h_small = self.ren.f_small.get_height()
+        tip_y = sh - 34
+        limit = tip_y - h_small // 2 - 10          # 按钮块底边的下限
+
+        y_title, y_sub, y0 = 76, 112, 160
+        for gap, bh in ((16, 62), (12, 62), (12, 58), (10, 56)):
+            if y0 + n * bh + (n - 1) * gap <= limit:
+                return y_title, y_sub, y0, bh, gap, tip_y
+
+        # 压到最小仍装不下：按钮块贴住底部上限，标题区一道上移
+        gap, bh = 10, 56
+        need = n * bh + (n - 1) * gap
+        y0 = max(0, limit - need)
+        y_sub = min(y_sub, y0 - 12 - h_small // 2)
+        y_title = min(y_title, y_sub - h_small // 2 - 6 - h_title // 2)
+        return y_title, y_sub, y0, bh, gap, tip_y
+
+    def _menu_tip(self, sw):
+        """底部提示按窗口宽度选取最长的可容纳版本，窄窗口下不会横向出界。"""
+        for text in ("左键翻开 · 右键插旗 · 中键快速翻开 · F2 重开 · ESC 退出",
+                     "左键翻开 · 右键插旗 · 中键和弦 · F2 重开",
+                     "左键翻开 · 右键插旗 · F2 重开"):
+            if self.ren.f_small.size(text)[0] <= sw - 20:
+                return text
+        return "左键翻开 · 右键插旗"
+
     def draw_menu(self):
         sw, sh = self.screen.get_size()
         self.screen.fill((232, 232, 232))
-        title = self.ren.f_title.render("扫  雷", True, (40, 40, 40))
-        self.screen.blit(title, title.get_rect(center=(sw // 2, 76)))
-        sub = self.ren.f_small.render("Minesweeper · pygame", True, C_SHADOW)
-        self.screen.blit(sub, sub.get_rect(center=(sw // 2, 112)))
+        n = len(DIFFICULTIES)
+        y_title, y_sub, y0, bh, gap, tip_y = self._menu_geometry(sh, n)
 
+        title = self.ren.f_title.render("扫  雷", True, (40, 40, 40))
+        self.screen.blit(title, title.get_rect(center=(sw // 2, y_title)))
+        sub = self.ren.f_small.render("Minesweeper · pygame", True, C_SHADOW)
+        self.screen.blit(sub, sub.get_rect(center=(sw // 2, y_sub)))
+
+        bw = min(250, max(150, sw - 60))
         self._menu_rects = []
-        bw, bh = 250, 62
-        y0 = 160
         for i, d in enumerate(DIFFICULTIES):
-            rect = pygame.Rect(sw // 2 - bw // 2, y0 + i * (bh + 16), bw, bh)
+            rect = pygame.Rect(sw // 2 - bw // 2, y0 + i * (bh + gap), bw, bh)
             self._menu_rects.append(rect)
             hovered = rect.collidepoint(pygame.mouse.get_pos())
             pygame.draw.rect(self.screen, (214, 226, 245) if hovered else C_FACE, rect, border_radius=6)
             bevel(self.screen, rect, raised=True, t=3)
+            # 两行文字的内缩量随按钮高度等比收缩，矮按钮里文字也不会出框
+            off1 = max(7, min(9, bh * 3 // 20))
+            off2 = max(11, min(15, bh // 4))
             nm = self.ren.f_menu.render(d["name"], True, (20, 60, 140))
             ds = self.ren.f_small.render(d["desc"], True, C_DARK)
-            self.screen.blit(nm, nm.get_rect(midleft=(rect.left + 22, rect.centery - 9)))
-            self.screen.blit(ds, ds.get_rect(midleft=(rect.left + 22, rect.centery + 15)))
+            self.screen.blit(nm, nm.get_rect(midleft=(rect.left + 22, rect.centery - off1)))
+            self.screen.blit(ds, ds.get_rect(midleft=(rect.left + 22, rect.centery + off2)))
 
-        tip = self.ren.f_small.render("左键翻开 · 右键插旗 · 中键快速翻开 · F2 重开 · ESC 退出",
-                                      True, C_SHADOW)
-        self.screen.blit(tip, tip.get_rect(center=(sw // 2, sh - 34)))
+        tip = self.ren.f_small.render(self._menu_tip(sw), True, C_SHADOW)
+        self._tip_rect = tip.get_rect(center=(sw // 2, tip_y))
+        self.screen.blit(tip, self._tip_rect)
 
     def draw(self):
         if self.screen is None:
@@ -623,67 +672,211 @@ class Game:
 
 # ============================ 无头自测 ============================
 def smoke_test():
-    """SDL dummy 驱动下跑通完整流程，验证逻辑无异常。"""
+    """SDL dummy 驱动下无头跑通完整流程，返回退出码（0 = 全部通过）。
+
+    覆盖：三档难度的必胜路径与必败路径、首击安全、每格数字校验、
+    和弦（旗数匹配 / 不足两种情形）、随机对局计数一致性、
+    菜单几何（按钮与提示不越界）以及胜负结算面板绘制。
+    """
     os.environ["SDL_VIDEODRIVER"] = "dummy"
     os.environ["SDL_AUDIODRIVER"] = "dummy"
-    g = Game()
-    g.set_difficulty(2)          # 直接上最大盘
-    g.menu = False
+    pygame.init()
+    random.seed(20260920)
 
-    frames = 0
-    while g.board.state == ST_PLAY and frames < 4000:
-        # 随机点一个未翻开的格子
-        closed = [(c, r) for r in range(g.board.rows) for c in range(g.board.cols)
-                  if not g.board.cell(c, r).open]
-        if not closed:
-            break
-        c, r = random.choice(closed)
-        if random.random() < 0.25:
-            g.board.toggle_flag(c, r)
+    fails = []
+    total = 0
+
+    def check(name, cond, detail=""):
+        nonlocal total
+        total += 1
+        if cond:
+            print(f"  [ok]   {name}")
         else:
-            g.board.reveal(c, r)
+            fails.append(f"{name}   {detail}")
+            print(f"  [FAIL] {name}   {detail}")
+
+    def mines_of(b):
+        return [(c, r) for r in range(b.rows) for c in range(b.cols) if b.cell(c, r).mine]
+
+    def opened_of(b):
+        return [(c, r) for r in range(b.rows) for c in range(b.cols) if b.cell(c, r).open]
+
+    def flags_of(b):
+        return [(c, r) for r in range(b.rows) for c in range(b.cols) if b.cell(c, r).flag]
+
+    def find_chordable(b):
+        """找一个可验证和弦的数字格：adj > 0 且至少有一个未翻开的非雷邻格。"""
+        for c, r in opened_of(b):
+            if b.cell(c, r).adj == 0:
+                continue
+            nb = [(nc, nr) for nc, nr in b.neighbors(c, r) if not b.cell(nc, nr).open]
+            if any(not b.cell(nc, nr).mine for nc, nr in nb):
+                return c, r, nb
+        return None
+
+    g = Game()
+
+    # ---------- 1. 三档难度：必胜路径（逐格翻开全部非雷格） ----------
+    print("\n[1] 三档难度必胜路径")
+    for idx, d in enumerate(DIFFICULTIES):
+        g.set_difficulty(idx)
+        g.menu = False
+        b = g.board
+        b.arm(d["cols"] // 2, d["rows"] // 2)
+        need = d["cols"] * d["rows"] - d["mines"]
+        safe = [(c, r) for r in range(b.rows) for c in range(b.cols)
+                if not b.cell(c, r).mine]
+        for i, (c, r) in enumerate(safe):
+            b.reveal(c, r)
+            if i % 16 == 0:                 # 边翻边渲染，顺带压一遍绘制路径
+                g.update()
+                g.draw()
+        g.draw()
+        check(f"{d['name']}：必胜路径判定为胜利", b.state == ST_WON, f"state={b.state}")
+        check(f"{d['name']}：胜利时翻开数 = 非雷格总数", b.opened == need,
+              f"opened={b.opened} != {need}")
+        check(f"{d['name']}：胜利时旗数 = 雷数", b.flags == d["mines"],
+              f"flags={b.flags} != {d['mines']}")
+        check(f"{d['name']}：盘上雷数正确", len(mines_of(b)) == d["mines"],
+              f"{len(mines_of(b))}")
+        check(f"{d['name']}：没有任何雷格被翻开",
+              not any(b.cell(c, r).open for c, r in mines_of(b)))
+
+    # ---------- 2. 三档难度：必败路径 ----------
+    print("\n[2] 三档难度必败路径")
+    for idx, d in enumerate(DIFFICULTIES):
+        g.set_difficulty(idx)
+        g.menu = False
+        b = g.board
+        b.arm(0, 0)
+        mc, mr = mines_of(b)[0]
+        b.reveal(mc, mr)
+        g.update()
+        g.draw()
+        check(f"{d['name']}：踩雷判定为失败", b.state == ST_LOST, f"state={b.state}")
+        check(f"{d['name']}：踩中的那颗雷被标记 boom", b.cell(mc, mr).boom)
+        check(f"{d['name']}：失败后全部地雷展示",
+              all(b.cell(c, r).open for c, r in mines_of(b)))
+        closed_safe = [(c, r) for r in range(b.rows) for c in range(b.cols)
+                       if not b.cell(c, r).open and not b.cell(c, r).mine]
+        check(f"{d['name']}：失败后拒绝继续翻开",
+              bool(closed_safe) and b.reveal(*closed_safe[0]) is False,
+              f"closed_safe={len(closed_safe)}")
+
+    # ---------- 3. 首击安全 + 每格数字 ----------
+    print("\n[3] 首击安全与数字正确性")
+    for idx, d in enumerate(DIFFICULTIES):
+        bad = None
+        for _ in range(40):
+            b = Board(d["cols"], d["rows"], d["mines"])
+            c, r = random.randrange(d["cols"]), random.randrange(d["rows"])
+            b.reveal(c, r)
+            if b.cell(c, r).mine or b.cell(c, r).adj != 0:
+                bad = (c, r, b.cell(c, r).mine, b.cell(c, r).adj)
+                break
+        check(f"{d['name']}：首击 40 次均安全且周围一圈无雷", bad is None, f"{bad}")
+
+        b = Board(d["cols"], d["rows"], d["mines"])
+        b.arm(d["cols"] // 2, d["rows"] // 2)
+        wrong = [(c, r) for r in range(b.rows) for c in range(b.cols)
+                 if b.cell(c, r).adj != sum(1 for nc, nr in b.neighbors(c, r)
+                                            if b.cell(nc, nr).mine)]
+        check(f"{d['name']}：每格数字 = 邻雷数", not wrong, f"不符 {wrong[:4]}")
+
+    # ---------- 4. 和弦 ----------
+    print("\n[4] 和弦（数字格上快速翻开周围）")
+    b = Board(9, 9, 10)
+    b.arm(4, 4)
+    b.reveal(4, 4)
+    t = find_chordable(b)
+    check("和弦：洪水区边界存在可验证的数字格", t is not None, "未找到")
+    if t:
+        c, r, nb = t
+        b.chord(c, r)                                   # 未插旗 -> 不应翻开
+        touched = [x for x in nb if not b.cell(*x).mine and b.cell(*x).open]
+        check("和弦：旗数不足时保持不动", not touched, f"被误翻开 {touched}")
+        for nc, nr in nb:                               # 补满旗
+            if b.cell(nc, nr).mine:
+                b.toggle_flag(nc, nr)
+        b.chord(c, r)
+        missed = [x for x in nb if not b.cell(*x).mine and not b.cell(*x).open]
+        check("和弦：旗数匹配时翻开其余安全邻格", not missed, f"未翻开 {missed}")
+
+    # ---------- 5. 随机对局一致性 ----------
+    print("\n[5] 随机对局 400 帧")
+    g.set_difficulty(0)
+    g.menu = False
+    frames = 0
+    for _ in range(400):
+        b = g.board                        # 每轮重新绑定：restart 会换一张新盘
+        c, r = random.randrange(b.cols), random.randrange(b.rows)
+        if random.random() < 0.25:
+            b.toggle_flag(c, r)
+        else:
+            b.reveal(c, r)
+        if b.state != ST_PLAY:
+            g.restart()
         g.update()
         g.draw()
         frames += 1
-
-    assert g.board.state in (ST_WON, ST_LOST), f"状态异常: {g.board.state}"
-
-    # 统计校验
     b = g.board
-    mines_on_board = sum(1 for r in range(b.rows) for c in range(b.cols) if b.cell(c, r).mine)
-    assert mines_on_board == b.total_mines, f"雷数不符 {mines_on_board} != {b.total_mines}"
+    check("随机对局后 opened 计数与实际翻开格数一致", b.opened == len(opened_of(b)),
+          f"{b.opened} != {len(opened_of(b))}")
+    check("随机对局后 flags 计数与实际旗数一致", b.flags == len(flags_of(b)),
+          f"{b.flags} != {len(flags_of(b))}")
+    check("随机对局后盘上雷数正确", len(mines_of(b)) == b.total_mines,
+          f"{len(mines_of(b))} != {b.total_mines}")
 
-    opened_non_mine = sum(1 for r in range(b.rows) for c in range(b.cols)
-                          if b.cell(c, r).open and not b.cell(c, r).mine)
-    assert opened_non_mine == b.opened, "opened 计数与实际不符"
-
-    if b.state == ST_WON:
-        assert b.opened == b.cols * b.rows - b.total_mines, "胜利时翻开数不正确"
-        assert b.flags == b.total_mines, "胜利时旗数不正确"
-
-    # 重开 + 和弦 + 菜单 绘制各跑一遍
-    g.restart()
-    g.board.reveal(0, 0)
-    for r in range(b.rows):
-        for c in range(b.cols):
-            if b.cell(c, r).open and b.cell(c, r).adj > 0:
-                g.board.chord(c, r)
-                break
-    g.draw()
-    g.menu = True
-    g.draw()
-    for i in range(len(DIFFICULTIES)):
-        g.set_difficulty(i)
+    # ---------- 6. 菜单几何与结算面板 ----------
+    print("\n[6] 菜单几何与结算面板")
+    for idx, d in enumerate(DIFFICULTIES):
+        g.set_difficulty(idx)
+        g.menu = True
         g.draw()
-        g.board.reveal(g.board.cols // 2, g.board.rows // 2)
+        sw, sh = g.screen.get_size()
+        rects = g._menu_rects
+        check(f"{d['name']}：难度按钮全部落在窗口内",
+              len(rects) == len(DIFFICULTIES)
+              and all(0 <= r.left and r.right <= sw and 0 <= r.top and r.bottom <= sh
+                      for r in rects),
+              f"窗口 {sw}x{sh} 按钮 {[tuple(r) for r in rects]}")
+        check(f"{d['name']}：按钮块不越过底部提示行",
+              rects[-1].bottom <= g._tip_rect.top,
+              f"按钮底 {rects[-1].bottom} / 提示顶 {g._tip_rect.top}")
+        check(f"{d['name']}：提示文字不横向出界",
+              0 <= g._tip_rect.left and g._tip_rect.right <= sw,
+              f"提示 {g._tip_rect.left}..{g._tip_rect.right} / 窗口宽 {sw}")
+        right_gap = sw - (g.origin[0] + d["cols"] * CELL)
+        check(f"{d['name']}：棋盘左右留白对称",
+              abs(g.origin[0] - right_gap) <= 1,
+              f"左 {g.origin[0]} / 右 {right_gap}")
+
+        g.menu = False
+        g.board.arm(0, 0)
+        g.board.lose()
         g.draw()
+        shade = g.screen.get_at((2, 2))[:3]
+        check(f"{d['name']}：失败结算面板带遮罩", sum(shade) < sum(C_FACE) - 30, f"{shade}")
+        g.board.win()
+        g.draw()
+        check(f"{d['name']}：胜利结算面板可绘制", g.board.state == ST_WON)
+
+    print("\n" + "=" * 56)
+    if fails:
+        print(f"[SMOKE FAILED] {total - len(fails)}/{total} 项通过")
+        for f in fails:
+            print("  [FAIL] " + f)
+        print("=" * 56)
+        pygame.quit()
+        return 1
+    print(f"[SMOKE OK] 全部 {total} 项通过 · 随机对局 {frames} 帧")
+    print("=" * 56)
     pygame.quit()
-    print(f"[SMOKE OK] frames={frames} state={b.state} time={b.time} "
-          f"opened={b.opened}/{b.cols*b.rows-b.total_mines} mines={mines_on_board}")
+    return 0
 
 
 if __name__ == "__main__":
     if "--test" in sys.argv:
-        smoke_test()
+        sys.exit(smoke_test())
     else:
         Game().run()
