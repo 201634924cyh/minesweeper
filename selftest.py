@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-minesweeper.py 的无窗口自检。
+minesweeper.py 的独立无窗口自检（与内置的 `minesweeper.py --test` 互补）。
 
 用法：
-    python selftest.py              # 或 python minesweeper.py --test
+    python selftest.py              # 本文件，63 项断言
+
+菜单说明：菜单是自适应布局，与棋盘共用同一个窗口，进入菜单只要把 `Game.menu`
+置回 True —— 没有独立的 open_menu() / menu_size() 入口（早期版本有，已随自适应
+布局一起移除）。这一段断言原先还按旧版固定布局写，改用当前 API 后不再崩溃。
 
 覆盖：布雷与首点安全 / 三档难度必胜路径 / 状态机全分支 / 标旗与剩余雷数 /
-和弦翻开 / 计时器 / 随机对局压力 / 中文字形可用性 / 各状态截图 + 像素扫描。
+和弦翻开 / 计时器 / 随机对局压力 / 中文字形可用性 / 菜单几何（三档窗口）/
+各状态截图 + 像素扫描。
 """
 
 import os
@@ -47,7 +52,9 @@ def new_game(diff=0, menu=False):
     g = M.Game()
     g.set_difficulty(diff)
     if menu:
-        g.open_menu()          # 菜单有自己的窗口尺寸，必须走这个入口
+        # 菜单是自适应布局（见 Game._menu_geometry / _menu_tip），和棋盘共用同一个窗口，
+        # 任何一档尺寸都画得下 —— 不再有独立的 open_menu() 入口，置标志即可。
+        g.menu = True
     return g
 
 
@@ -322,24 +329,38 @@ g.draw()
 menu_game = g                      # 后面 g 会被复用到别的局面，这里留住菜单这一份
 save(g.screen, "01_menu.png")
 
-# 菜单布局：窗口必须装得下三张卡片 + 底部提示，否则第三张会被切掉
-cards_h = len(M.DIFFICULTIES) * M.MENU_CARD_H + (len(M.DIFFICULTIES) - 1) * M.MENU_CARD_GAP
-mw, mh = g.menu_size()
-check("菜单窗口高度容得下三张卡片", mh >= M.MENU_TOP + cards_h,
-      f"mh={mh} need={M.MENU_TOP + cards_h}")
-check("菜单窗口还为底部提示留了空间", mh >= M.MENU_TOP + cards_h + 20, f"mh={mh}")
-tip_w = g.ren.f_small.render(M.MENU_TIP, True, (0, 0, 0)).get_width()
-check("菜单窗口宽度容得下底部提示文字", mw >= tip_w + 24, f"mw={mw} tip_w={tip_w}")
-check("菜单窗口宽度容得下难度卡片", mw >= M.MENU_CARD_W, f"mw={mw}")
-check("菜单卡片全部落在窗口内",
-      all(0 <= r.top and r.bottom <= mh and 0 <= r.left and r.right <= mw for r in g._menu_rects),
-      f"rects={[(r.top, r.bottom) for r in g._menu_rects]} win={mw}x{mh}")
-check("菜单卡片互不重叠",
-      all(g._menu_rects[i].bottom <= g._menu_rects[i + 1].top
-          for i in range(len(g._menu_rects) - 1)))
-# 初级盘窗口只有 370px 高，若菜单沿用棋盘窗口就会溢出——这里锁死回归
-check("初级盘的棋盘窗口确实放不下菜单（所以菜单必须独立尺寸）",
-      M.Game().size_for(0)[1] < M.MENU_TOP + cards_h)
+# 菜单布局：菜单与棋盘共用同一个窗口，靠 _menu_geometry() 按窗口高度自适应压缩。
+# 三档窗口（初级最小，360x370）都必须装得下三张卡片 + 底部提示，否则第三张会被切掉。
+for _i, _d in enumerate(M.DIFFICULTIES):
+    mg = new_game(_i, menu=True)
+    mg.draw()
+    mw, mh = mg.screen.get_size()
+    rects = mg._menu_rects
+    check(f"菜单/{_d['name']}：三张难度卡片齐全", len(rects) == len(M.DIFFICULTIES),
+          f"cards={len(rects)}")
+    check(f"菜单/{_d['name']}：卡片全部落在窗口内",
+          all(0 <= r.top and r.bottom <= mh and 0 <= r.left and r.right <= mw for r in rects),
+          f"rects={[(r.top, r.bottom) for r in rects]} win={mw}x{mh}")
+    check(f"菜单/{_d['name']}：卡片互不重叠",
+          all(rects[i].bottom <= rects[i + 1].top for i in range(len(rects) - 1)),
+          f"rects={[(r.top, r.bottom) for r in rects]}")
+    check(f"菜单/{_d['name']}：卡片块不越过底部提示行", rects[-1].bottom <= mg._tip_rect.top,
+          f"卡片底={rects[-1].bottom} 提示顶={mg._tip_rect.top}")
+    check(f"菜单/{_d['name']}：底部提示不横向出界",
+          0 <= mg._tip_rect.left and mg._tip_rect.right <= mw,
+          f"提示={mg._tip_rect.left}..{mg._tip_rect.right} 窗口宽={mw}")
+
+# 回归锁：初级窗口只有 370px 高，沿用宽敞档的间距与按钮高度（62 + 16）会让第三张越界。
+# 这里盯住最窄最小的那档，确认自适应压缩真的介入了，而不是恰好蒙混过关。
+_min = new_game(0, menu=True)
+_min.draw()
+check("初级（最小）窗口下菜单启用了压缩布局（按钮高度 < 宽敞值 62）",
+      _min._menu_rects[0].height < 62, f"按钮高={_min._menu_rects[0].height}")
+check("初级窗口下第三张卡片仍在窗口内且不压提示行",
+      _min._menu_rects[-1].bottom <= _min.screen.get_height()
+      and _min._menu_rects[-1].bottom <= _min._tip_rect.top,
+      f"卡3底={_min._menu_rects[-1].bottom} 窗高={_min.screen.get_height()}"
+      f" 提示顶={_min._tip_rect.top}")
 
 # 对局中（中级，翻开一片 + 插几面旗）
 g = new_game(1)
@@ -443,7 +464,10 @@ print("=" * 52)
 
 
 def main():
-    """供 minesweeper.py --test 调用。"""
+    """供外部脚本 / CI 导入调用：全部通过返回 True。
+
+    注意 `minesweeper.py --test` 走的是内置的 smoke_test()，与本文件互相独立。
+    """
     return FAIL == 0
 
 

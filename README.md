@@ -5,7 +5,7 @@
 ![Language](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![Dependency](https://img.shields.io/badge/dependency-pygame-2C8E4E)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Selftest](https://img.shields.io/badge/selftest-62%20passed-brightgreen)
+![Selftest](https://img.shields.io/badge/selftest-125%20passed-brightgreen)
 
 ## 预览
 
@@ -64,10 +64,11 @@ cd minesweeper
 ```
 minesweeper/
 ├── minesweeper.py     # 游戏本体：配置、工具、棋盘逻辑、渲染、主循环、无头自测（单文件）
+├── selftest.py        # 独立无头自测：菜单几何 + 像素扫描（63 项断言）
 ├── run.bat            # Windows 启动脚本
 ├── run.sh             # macOS / Linux 启动脚本
 ├── requirements.txt   # 依赖（仅 pygame）
-├── preview/           # README 用的截图（由 --test 自动重新生成）
+├── preview/           # README 用的截图（自测自动重新生成）
 ├── LICENSE
 ├── .gitignore
 └── .gitattributes
@@ -82,11 +83,14 @@ minesweeper/
 
 ## 自测
 
+两套互补的无头自测，都以 SDL dummy 驱动、全部通过时退出码为 0，适合接 CI：
+
 ```bash
-python minesweeper.py --test
+python minesweeper.py --test    # 内置自测，62 项断言
+python selftest.py              # 独立自测脚本，63 项断言
 ```
 
-以 SDL dummy 驱动无头跑 62 项断言，全部通过时退出码为 0，适合接 CI。覆盖：
+合计 **125 项断言**，覆盖：
 
 - **三档难度必胜路径**：逐格翻开全部非雷格，校验判定为胜、翻开数 = 非雷格总数、旗数 = 雷数、无雷格被翻开
 - **三档难度必败路径**：踩雷后判定为负、踩中的那颗被标记、其余地雷全部展示、拒绝继续输入
@@ -94,12 +98,16 @@ python minesweeper.py --test
 - **每格数字**：逐格比对 `adj` 与实际邻雷数
 - **和弦**：旗数不足时不动作；补满旗后翻开其余安全邻格
 - **随机对局 400 帧**：`opened` / `flags` 计数与实际盘面始终一致
-- **菜单几何**：三档窗口下按钮均在窗口内、不与底部提示重叠、提示文字不被裁切
+- **菜单几何**：三档窗口下卡片均在窗口内、互不重叠、不与底部提示重叠、提示文字不被裁切
 - **棋盘居中**：三档难度左右与上下留白对称
 - **中文字形**：定位到的字体必须真的带中文字形（`metrics()` 非 None）—— 字体回退的回归测试
 - **布雷幂等**：`arm()` 重复调用不会叠加布雷
 
-自测会顺带把 README 用的截图重新生成到 `preview/`。
+`selftest.py` 另有截图后的**像素扫描**（菜单标题确有文字像素、卡片之间是纯背景色、棋盘出现数字配色、
+HUD 数码管是红色、结算面板比棋盘更亮），以及「初级最小窗口下菜单确实启用了压缩布局」的回归锁
+—— 菜单是自适应布局，与棋盘共用同一个窗口，没有独立的菜单窗口尺寸。
+
+两套自测都会顺带把 README 用的截图重新生成到 `preview/`。
 
 ## 布局说明
 
