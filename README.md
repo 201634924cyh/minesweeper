@@ -5,6 +5,7 @@
 ![Language](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![Dependency](https://img.shields.io/badge/dependency-pygame-2C8E4E)
 ![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-1.2-blue)
 ![Selftest](https://img.shields.io/badge/selftest-125%20passed-brightgreen)
 
 ## 预览
@@ -27,6 +28,15 @@
 - 空白格自动洪水扩散；数字按经典配色（1 蓝 2 绿 3 红 …）
 - 中文字体按 Windows / macOS / Linux 常见字体族依次匹配，全都没命中时再遍历系统字体兜底，
   并逐个用字形表校验，不会退化成方框乱码
+
+## 语言切换
+
+界面默认中文，`--lang en` 切换到英文界面：
+
+```bash
+python minesweeper.py            # 中文（默认）
+python minesweeper.py --lang en  # 英文
+```
 
 ## 快速开始
 

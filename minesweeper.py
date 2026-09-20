@@ -19,6 +19,33 @@ import sys
 
 import pygame
 
+
+# ---------------- i18n: bilingual UI (v1.2) ----------------
+# 界面文案中英双语：默认中文，`--lang en` 切换英文。
+# 常量在模块加载时按 _LANG 求值，因此 --lang 在文件顶部立即解析。
+_LANG = "zh"
+
+
+def set_language(lang):
+    global _LANG
+    if lang in ("zh", "en"):
+        _LANG = lang
+
+
+def _t(zh, en):
+    return en if _LANG == "en" else zh
+
+
+def _bootstrap_lang():
+    argv = sys.argv[1:]
+    if "--lang" in argv:
+        i = argv.index("--lang")
+        if i + 1 < len(argv):
+            set_language(argv[i + 1])
+
+
+_bootstrap_lang()
+# ------------------------------------------------------------
 # ============================ 配置常量 ============================
 CELL = 32                 # 单格像素
 PAD = 10                  # 棋盘外边距
@@ -27,9 +54,9 @@ LED_W, LED_H = 58, 38     # 数码管尺寸
 FACE_R = 20               # 笑脸半径
 
 DIFFICULTIES = [
-    {"key": "beginner",     "name": "初级", "cols": 9,  "rows": 9,  "mines": 10, "desc": "9 × 9 · 10 雷"},
-    {"key": "intermediate", "name": "中级", "cols": 16, "rows": 16, "mines": 40, "desc": "16 × 16 · 40 雷"},
-    {"key": "expert",       "name": "高级", "cols": 30, "rows": 16, "mines": 99, "desc": "30 × 16 · 99 雷"},
+    {"key": "beginner",     "name": _t("初级", "Beginner"), "cols": 9,  "rows": 9,  "mines": 10, "desc": _t("9 × 9 · 10 雷", "9 × 9 · 10 mines")},
+    {"key": "intermediate", "name": _t("中级", "Intermediate"), "cols": 16, "rows": 16, "mines": 40, "desc": _t("16 × 16 · 40 雷", "16 × 16 · 40 mines")},
+    {"key": "expert",       "name": _t("高级", "Expert"), "cols": 30, "rows": 16, "mines": 99, "desc": _t("30 × 16 · 99 雷", "30 × 16 · 99 mines")},
 ]
 
 # —— 配色（经典 Win 风格）——
@@ -422,7 +449,7 @@ class Renderer:
 class Game:
     def __init__(self):
         pygame.init()
-        pygame.display.set_caption("扫雷 Minesweeper")
+        pygame.display.set_caption(_t("扫雷 Minesweeper", "Minesweeper"))
         self.ren = Renderer()
         self.diff_index = 0
         self.board = None
@@ -618,7 +645,7 @@ class Game:
         b = self.board
         sw, sh = self.screen.get_size()
         won = b.state == ST_WON
-        title = "你赢了！" if won else "踩雷了…"
+        title = _t("你赢了！", "You Win!") if won else _t("踩雷了…", "Boom!")
         color = (40, 140, 60) if won else (180, 40, 40)
 
         panel = pygame.Rect(0, 0, 300, 132)
@@ -634,7 +661,7 @@ class Game:
         info = self.ren.f_hint.render(f"用时 {b.time} 秒   ·   {DIFFICULTIES[self.diff_index]['name']}",
                                       True, C_DARK)
         self.screen.blit(info, info.get_rect(center=(panel.centerx, panel.top + 80)))
-        tip = self.ren.f_small.render("F2 / 点笑脸 重新开始，M 返回菜单", True, C_SHADOW)
+        tip = self.ren.f_small.render(_t("F2 / 点笑脸 重新开始，M 返回菜单", "F2 / smiley restart · M menu"), True, C_SHADOW)
         self.screen.blit(tip, tip.get_rect(center=(panel.centerx, panel.top + 108)))
 
     def _menu_geometry(self, sh, n):
@@ -663,12 +690,12 @@ class Game:
 
     def _menu_tip(self, sw):
         """底部提示按窗口宽度选取最长的可容纳版本，窄窗口下不会横向出界。"""
-        for text in ("左键翻开 · 右键插旗 · 中键快速翻开 · F2 重开 · ESC 退出",
-                     "左键翻开 · 右键插旗 · 中键和弦 · F2 重开",
-                     "左键翻开 · 右键插旗 · F2 重开"):
+        for text in (_t("左键翻开 · 右键插旗 · 中键快速翻开 · F2 重开 · ESC 退出", "LMB reveal · RMB flag · MMB quick-open · F2 restart · ESC quit"),
+                     _t("左键翻开 · 右键插旗 · 中键和弦 · F2 重开", "LMB reveal · RMB flag · MMB chord · F2 restart"),
+                     _t("左键翻开 · 右键插旗 · F2 重开", "LMB reveal · RMB flag · F2 restart")):
             if self.ren.f_small.size(text)[0] <= sw - 20:
                 return text
-        return "左键翻开 · 右键插旗"
+        return _t("左键翻开 · 右键插旗", "LMB reveal · RMB flag")
 
     def draw_menu(self):
         sw, sh = self.screen.get_size()
@@ -676,7 +703,7 @@ class Game:
         n = len(DIFFICULTIES)
         y_title, y_sub, y0, bh, gap, tip_y = self._menu_geometry(sh, n)
 
-        title = self.ren.f_title.render("扫  雷", True, (40, 40, 40))
+        title = self.ren.f_title.render(_t("扫  雷", "Minesweeper"), True, (40, 40, 40))
         self.screen.blit(title, title.get_rect(center=(sw // 2, y_title)))
         sub = self.ren.f_small.render("Minesweeper · pygame", True, C_SHADOW)
         self.screen.blit(sub, sub.get_rect(center=(sw // 2, y_sub)))
